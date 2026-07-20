@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forgecli"
+version = "1.0.0"
+description = "ForgeCLI - Premium Terminal Tool Builder that generates complete, production-quality CLI applications from user input."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Arjun TM", email = "support@forgecli.dev"},
+]
+keywords = ["cli", "generator", "scaffolder", "tooling", "terminal", "rich", "cyberpunk"]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+    "rich>=13.7.0",
+    "pyfiglet>=1.0.2",
+    "questionary>=2.0.1",
+    "colorama>=0.4.6",
+]
+
+[project.scripts]
+forgecli = "forgecli.cli:main"
+forge = "forgecli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["forgecli*"]
+
+[tool.setuptools.package-data]
+forgecli = ["generators/templates/*.tpl", "generators/templates/*.json.tpl"]
