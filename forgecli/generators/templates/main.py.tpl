@@ -42,11 +42,10 @@ ensure_runtime_dependencies([
 ])
 
 from rich.console import Console
-import questionary
 
 from theme import load_theme, get_builtin_theme
 from banner import show_banner
-from ui import info_table, make_ctx, render_menu, run_startup_animation
+from ui import info_table, make_ctx, select_menu, run_startup_animation
 from utils import collect_system_info
 from updater import check_for_update
 from commands import commands_for
@@ -123,11 +122,7 @@ def main() -> int:
             return 0
         labels = [name for name, _ in commands] + ["Help", "About", "Update check", "Exit"]
         try:
-            rendered = render_menu(theme)
-            choice = questionary.select(
-                "Choose a command",
-                choices=labels,
-            ).ask()
+            choice = select_menu("Choose a command", labels, theme=theme)
         except (KeyboardInterrupt, EOFError):
             console.print(f"[{theme.muted}]Goodbye.[/]")
             return 0

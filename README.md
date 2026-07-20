@@ -127,6 +127,18 @@ forgecli
 
 Termux ships its own Python — no system Python needed.
 
+#### ⚡ 1-click install (recommended)
+
+From anywhere in Termux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cyberkallan/forgecli/main/install-termux.sh | bash
+```
+
+That single command updates Termux, installs `python git clang libffi openssl`, clones ForgeCLI, installs the Python deps, `chmod +x` every script, and drops a global `forgecli` launcher in `$PREFIX/bin` so you can run `forgecli` from any directory. Re-running it just updates — it never deletes your generated tools or profiles.
+
+#### Manual install
+
 ```bash
 # 1. Update Termux and grab Python + git
 pkg update -y && pkg upgrade -y

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import questionary
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -27,7 +26,7 @@ from .settings_view import manage_settings
 from .theme_creator import run_theme_creator
 from .ui.banners import build_banner
 from .ui.menu import MENU_STYLES, render_menu_table
-from .ui.prompts import console as default_console, confirm
+from .ui.prompts import ask as ask_text, choose as styled_choose, console as default_console, confirm
 from .ui.theme import Theme, build_registry
 
 _LOG = get_logger("dashboard")
@@ -95,12 +94,12 @@ def _print_dashboard(theme: Theme, settings: UserSettings) -> None:
     ))
 
 
-def _pick_project(console: Console) -> "GeneratedProject | None":
+def _pick_project(console: Console, theme: Theme = None) -> "GeneratedProject | None":
     projects = list_generated_projects()
     if not projects:
         return None
     labels = [f"{p.root.name}  ·  {p.branding.subcategory}" for p in projects]
-    choice = questionary.select("Open project", choices=labels).ask()
+    choice = styled_choose("Open project", labels, theme=theme)
     if not choice:
         return None
     idx = labels.index(choice)
@@ -108,13 +107,20 @@ def _pick_project(console: Console) -> "GeneratedProject | None":
 
 
 def _create_new_tool(console: Console, theme: Theme, settings: UserSettings) -> None:
-    if questionary.confirm("Use quick branding (essentials only)?",
-                            default=False).ask():
-        from .wizard.branding import run_quick_branding
-        branding = run_quick_branding(theme, settings)
-    else:
-        from .wizard.branding import run_branding_wizard
-        branding = run_branding_wizard(theme, settings)
+    try:
+        if confirm("Use quick branding (essentials only)?", default=False,
+                   theme=theme):
+            from .wizard.branding import run_quick_branding
+            branding = run_quick_branding(theme, settings)
+        else:
+            from .wizard.branding import run_branding_wizard
+            branding = run_branding_wizard(theme, settings)
+    except (KeyboardInterrupt, EOFError):
+        console.print(f"[{theme.muted}]Cancelled.[/]")
+        return
+    except Exception as exc:  # never let the wizard crash the whole dashboard
+        console.print(f"[{theme.danger}]Branding failed:[/] {exc}")
+        return
 
     if not branding:
         return
@@ -123,14 +129,32 @@ def _create_new_tool(console: Console, theme: Theme, settings: UserSettings) -> 
                         border_style=theme.border,
                         title=f"[{theme.primary}]Branding summary[/]"))
 
-    if not questionary.confirm("Generate this project?", default=True).ask():
+    if not confirm("Generate this project?", default=True, theme=theme):
         return
 
-    target_dir = questionary.text("Output directory",
-                                   settings.default_export_dir or "./exports").ask()
+    target_dir = ask_text("Output directory",
+                           settings.default_export_dir or "./exports",
+                           theme=theme)
     target = Path(target_dir) if target_dir else None
-    with console.status("[bold]Generating project...", spinner=theme.spinner_type if hasattr(theme, "spinner_type") else "dots"):
-        project = generate_project(branding, root=target, progress=lambda msg: console.print(f"  • {msg}"))
+    try:
+        with console.status("[bold]Generating project...",
+                             spinner=theme.spinner_type
+                             if hasattr(theme, "spinner_type") else "dots"):
+            project = generate_project(branding, root=target,
+                                        progress=lambda msg: console.print(f"  • {msg}"))
+    except FileExistsError as exc:
+        console.print(f"[{theme.warning}]{exc}[/]")
+        if confirm("Overwrite the existing folder?", False, theme=theme):
+            with console.status("[bold]Regenerating...",
+                                 spinner=theme.spinner_type
+                                 if hasattr(theme, "spinner_type") else "dots"):
+                project = generate_project(branding, root=target, overwrite=True,
+                                            progress=lambda msg: console.print(f"  • {msg}"))
+        else:
+            return
+    except Exception as exc:
+        console.print(f"[{theme.danger}]Generation failed:[/] {exc}")
+        return
     console.print(f"[{theme.success}]Project generated at {project.root}[/]")
 
 
@@ -152,13 +176,14 @@ def _branding_summary(b: Branding, theme) -> str:
 
 
 def _export_project(console: Console, theme: Theme, settings: UserSettings) -> None:
-    project = _pick_project(console)
+    project = _pick_project(console, theme)
     if not project:
         console.print(f"[{theme.warning}]No projects available. Create one first.[/]")
         return
-    fmt = questionary.select("Export format", EXPORT_FORMATS).ask() or "Zip (.zip)"
-    out_dir = questionary.text("Export directory",
-                                settings.default_export_dir or "./exports").ask()
+    fmt = styled_choose("Export format", EXPORT_FORMATS, theme=theme) or "Zip (.zip)"
+    out_dir = ask_text("Export directory",
+                        settings.default_export_dir or "./exports",
+                        theme=theme)
     try:
         target = export_project(project, fmt, Path(out_dir) if out_dir else None)
         console.print(f"[{theme.success}]Exported to {target}[/]")
@@ -167,13 +192,13 @@ def _export_project(console: Console, theme: Theme, settings: UserSettings) -> N
 
 
 def _preview_project(console: Console, theme: Theme) -> None:
-    project = _pick_project(console)
+    project = _pick_project(console, theme)
     if not project:
         console.print(f"[{theme.warning}]No projects available.[/]")
         return
-    mode = questionary.select("Preview mode",
-                              ["Run interactive", "Show file tree", "Show main.py",
-                               "Run headless smoke test"]).ask() or "Run interactive"
+    mode = styled_choose("Preview mode",
+                         ["Run interactive", "Show file tree", "Show main.py",
+                          "Run headless smoke test"], theme=theme) or "Run interactive"
     if mode == "Run interactive":
         console.print(f"[{theme.info}]Launching {project.root.name} ...[/]")
         launch_preview(project, console, theme, timeout=20)
@@ -193,10 +218,10 @@ def _preview_project(console: Console, theme: Theme) -> None:
 def _themes_view(console: Console, theme: Theme, settings: UserSettings) -> None:
     registry = build_registry()
     while True:
-        action = questionary.select("Themes", [
+        action = styled_choose("Themes", [
             "Switch active theme", "List themes", "Create custom theme",
             "Delete custom theme", "Back",
-        ]).ask()
+        ], theme=theme)
         if not action or action == "Back":
             return
         if action == "List themes":
@@ -204,8 +229,8 @@ def _themes_view(console: Console, theme: Theme, settings: UserSettings) -> None
                 t = registry.get(name)
                 console.print(f"[{theme.primary}]{name}[/] - {t.description}")
         elif action == "Switch active theme":
-            new_name = questionary.select("Active theme", registry.names,
-                                          default=theme.name).ask()
+            new_name = styled_choose("Active theme", registry.names,
+                                      default=theme.name, theme=theme)
             if new_name:
                 new_theme = registry.get(new_name) or theme
                 settings.default_theme = new_name
@@ -220,14 +245,14 @@ def _themes_view(console: Console, theme: Theme, settings: UserSettings) -> None
             if not targets:
                 console.print(f"[{theme.warning}]No custom themes.[/]")
                 continue
-            victim = questionary.select("Delete which?", targets).ask()
+            victim = styled_choose("Delete which?", targets, theme=theme)
             if victim and registry.delete_custom_theme(victim):
                 console.print(f"[{theme.success}]Deleted {victim}[/]")
 
 
 def _plugins_view(console: Console, theme: Theme) -> None:
     from .plugins import PLUGINS, plugin_map, load_plugin_state, save_plugin_state
-    project = _pick_project(console)
+    project = _pick_project(console, theme)
     if not project:
         console.print(f"[{theme.warning}]Open a project first.[/]")
         return
@@ -235,7 +260,7 @@ def _plugins_view(console: Console, theme: Theme) -> None:
     while True:
         labels = [f"{'✓' if state[p.key] else '✗'} {p.name}" for p in PLUGINS]
         labels.append("Back")
-        action = questionary.select("Plugins", labels).ask()
+        action = styled_choose("Plugins", labels, theme=theme)
         if not action or action == "Back":
             save_plugin_state(project.root, state)
             return
@@ -270,7 +295,7 @@ def _about_view(console: Console, theme: Theme) -> None:
 
 
 def _edit_project(console: Console, theme: Theme) -> None:
-    project = _pick_project(console)
+    project = _pick_project(console, theme)
     if not project:
         console.print(f"[{theme.warning}]No projects to edit.[/]")
         return
@@ -286,8 +311,8 @@ def run_dashboard(theme: Theme, settings: UserSettings) -> int:
     while True:
         _print_dashboard(theme, settings)
         try:
-            choice = questionary.select("Choose an action",
-                                          DASHBOARD_OPTIONS).ask()
+            choice = styled_choose("Choose an action", DASHBOARD_OPTIONS,
+                                    theme=theme)
         except (KeyboardInterrupt, EOFError):
             default_console.print(f"[{theme.muted}]Goodbye.[/]")
             return 0
@@ -297,7 +322,7 @@ def run_dashboard(theme: Theme, settings: UserSettings) -> int:
         if choice == "Create New Tool":
             _create_new_tool(default_console, theme, settings)
         elif choice == "Open Existing Project":
-            project = _pick_project(default_console)
+            project = _pick_project(default_console, theme)
             if project:
                 default_console.print(f"[{theme.success}]Opened {project.root}[/]")
                 manage_files(project.root, default_console, theme)

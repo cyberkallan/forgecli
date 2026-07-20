@@ -74,7 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate a new project non-interactively from flags.",
     )
     p_new.add_argument("--name", required=True, help="Project name (used as the folder slug).")
-    p_new.add_argument("--command", help="CLI command (defaults to slugified name).")
+    # Note: dest must not collide with the subparsers' "command" dest.
+    p_new.add_argument("--command", dest="command_name",
+                        help="CLI command (defaults to slugified name).")
     p_new.add_argument("--author", help="Author name.")
     p_new.add_argument("--github", help="GitHub profile URL.")
     p_new.add_argument("--category", help="Tool category (see `forgecli list-categories`).")
@@ -178,7 +180,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
     name = args.name.strip()
     if not name:
         return _err("Project name is required.")
-    cmd = args.command or _slug(name)
+    cmd = args.command_name or _slug(name)
     branding = Branding(
         project_name=name,
         command_name=cmd,

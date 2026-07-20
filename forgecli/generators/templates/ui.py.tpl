@@ -1,48 +1,156 @@
-"""UI helpers - prompts, panels, and the startup animation bridge."""
+"""UI helpers - prompts, panels, and the startup animation bridge.
+
+All interactive prompts go through ``ask``/``confirm``/``choose`` so they share
+a bold, theme-aware prompt_toolkit style and a big Rich header line above each
+prompt (keeps menus readable on Termux and other compact terminals).
+"""
 from __future__ import annotations
 
 import time
 from typing import Optional
 
 import questionary
+from questionary import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 
-def ask(message: str, default: str = "") -> str:
-    res = questionary.text(message, default=default).ask()
-    return res if res is not None else default
+# A single shared console for the generated tool.
+_console = Console()
 
 
-def confirm(message: str, default: bool = True) -> bool:
-    return bool(questionary.confirm(message, default=default).ask())
+# ---------------------------------------------------------------------------
+# prompt_toolkit color/style helpers
+# ---------------------------------------------------------------------------
+
+_PT_BASIC = {
+    "black": "ansiwhite", "red": "ansired", "green": "ansigreen",
+    "yellow": "ansiyellow", "blue": "ansiblue", "magenta": "ansimagenta",
+    "cyan": "ansicyan", "white": "ansiwhite", "grey": "ansibrightblack",
+    "gray": "ansibrightblack", "default": "default",
+}
+_PT_BRIGHT = {
+    "bright_red": "ansibrightred", "bright_green": "ansibrightgreen",
+    "bright_yellow": "ansibrightyellow", "bright_blue": "ansibrightblue",
+    "bright_magenta": "ansibrightmagenta", "bright_cyan": "ansibrightcyan",
+    "bright_white": "ansiwhite", "bright_black": "ansibrightblack",
+}
 
 
-def choose(message: str, choices, default: Optional[str] = None) -> Optional[str]:
+def _pt_color(color, *, default="ansicyan"):
+    """Convert a Rich theme color to a prompt_toolkit color spec."""
+    if not color:
+        return default
+    color = str(color).strip()
+    if not color:
+        return default
+    if color.startswith("#") and len(color) in (4, 7, 9):
+        return color
+    key = color.lower().replace(" ", "")
+    if key in _PT_BRIGHT:
+        return _PT_BRIGHT[key]
+    if key in _PT_BASIC:
+        return _PT_BASIC[key]
+    bare = "".join(ch for ch in key if ch.isalpha())
+    if bare in _PT_BRIGHT:
+        return _PT_BRIGHT[bare]
+    if bare in _PT_BASIC:
+        return _PT_BASIC[bare]
+    return default
+
+
+def _style_for(theme):
+    """Build a prompt_toolkit Style themed with ``theme``."""
+    primary = _pt_color(getattr(theme, "primary", None), default="ansicyan")
+    secondary = _pt_color(getattr(theme, "secondary", None), default="ansimagenta")
+    success = _pt_color(getattr(theme, "success", None), default="ansigreen")
+    muted = _pt_color(getattr(theme, "muted", None), default="ansibrightblack")
+    fg = _pt_color(getattr(theme, "fg", None), default="default")
+    return Style([
+        ("qmark", f"fg:{primary} bold"),
+        ("question", f"fg:{secondary} bold"),
+        ("pointer", f"fg:{primary} bold"),
+        ("highlighted", f"fg:{primary} bold"),
+        ("selected", f"fg:{success} bold"),
+        ("answer", f"fg:{success} bold"),
+        ("instruction", f"fg:{muted}"),
+        ("text", f"fg:{fg}"),
+        ("separator", f"fg:{muted}"),
+    ])
+
+
+def _print_header(message, theme):
+    """Render a big themed header above the prompt."""
+    primary = getattr(theme, "primary", "cyan") or "cyan"
+    secondary = getattr(theme, "secondary", "white") or "white"
+    _console.print(f"\n[bold {primary}]❯[/] [bold {secondary}]{message}[/]")
+
+
+# ---------------------------------------------------------------------------
+# Prompt helpers
+# ---------------------------------------------------------------------------
+
+def ask(message: str, default: str = "", theme=None) -> str:
+    _print_header(message, theme)
+    res = questionary.text(message, default=default or "",
+                           style=_style_for(theme)).ask()
+    return res if res is not None else (default or "")
+
+
+def confirm(message: str, default: bool = True, theme=None) -> bool:
+    _print_header(message, theme)
+    return bool(questionary.confirm(message, default=default,
+                                    style=_style_for(theme)).ask())
+
+
+def choose(message: str, choices, default: Optional[str] = None,
+           theme=None) -> Optional[str]:
+    """Arrow-key single select. ``default`` is guarded against ``choices``."""
     if not choices:
         return None
-    return questionary.select(message, choices=list(choices), default=default).ask()
+    safe_default = default if default in choices else None
+    _print_header(message, theme)
+    return questionary.select(message, choices=list(choices),
+                              default=safe_default,
+                              style=_style_for(theme)).ask()
+
+
+def select_menu(title: str, options, *, theme, default: Optional[str] = None):
+    """Big themed menu for the main command loop.
+
+    Renders a decorative Rich header panel (via ``render_menu``) and then an
+    arrow-key navigable, styled ``questionary.select``. Returns the chosen
+    label or ``None`` on cancel.
+    """
+    render_menu(theme)
+    return choose(title, options, default=default, theme=theme)
 
 
 def panel(content, theme, *, title: str = "", subtitle: str = "") -> Panel:
     return Panel(
         content if isinstance(content, str) else content,
-        border_style=theme.border,
-        title=f"[{theme.primary}]{title}[/]" if title else None,
-        subtitle=f"[{theme.muted}]{subtitle}[/]" if subtitle else None,
+        border_style=getattr(theme, "border", "cyan") or "cyan",
+        title=f"[{getattr(theme, 'primary', 'cyan')}]{title}[/]" if title else None,
+        subtitle=f"[{getattr(theme, 'muted', 'bright_black')}]{subtitle}[/]"
+                 if subtitle else None,
         padding=(1, 2),
     )
 
 
 def make_ctx(console: Console, theme, **extra) -> dict:
+    """Build the command context. ``ask``/``confirm``/``choose`` are bound to
+    ``theme`` so every command prompt is styled, while keeping the simple
+    ``ctx['ask']('Host', '127.0.0.1')`` call signature commands already use."""
     return {
         "console": console,
         "theme": theme,
-        "ask": ask,
-        "confirm": confirm,
-        "choose": choose,
+        "ask": lambda message, default="": ask(message, default, theme=theme),
+        "confirm": lambda message, default=True: confirm(message, default, theme=theme),
+        "choose": lambda message, choices, default=None: choose(message, choices,
+                                                                  default=default,
+                                                                  theme=theme),
         "panel": lambda c, **kw: panel(c, theme, **kw),
         **extra,
     }
@@ -79,9 +187,7 @@ LOADING_ANIMATIONS = STARTUP_ANIMATIONS
 
 
 def render_menu(theme):
-    from rich.panel import Panel as _Panel
-    console = Console()
-    console.print(_Panel(
+    _console.print(Panel(
         f"[{theme.secondary}]{{PROJECT_NAME}}[/] · [{theme.muted}]v{{VERSION}}[/]\n"
         f"[{theme.info}]{{SUBCATEGORY}} · {{CATEGORY}}[/]",
         border_style=theme.border,
