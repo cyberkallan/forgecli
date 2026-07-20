@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ForgeCLI — bash launcher
+# Usage:  ./forge [args...]
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Prefer the venv if one exists
+if [ -f "$HERE/.venv/bin/python" ]; then
+    PY="$HERE/.venv/bin/python"
+elif [ -f "$HERE/.venv/Scripts/python.exe" ]; then
+    PY="$HERE/.venv/Scripts/python.exe"
+else
+    PY="$(command -v python3 || command -v python)"
+fi
+
+if [ -z "$PY" ]; then
+    echo "forge: Python not found. Install Python 3.9+ first." >&2
+    exit 1
+fi
+
+cd "$HERE"
+exec "$PY" -m forgecli "$@"
