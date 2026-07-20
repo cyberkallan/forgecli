@@ -268,7 +268,7 @@ def generate_project(branding: Branding, *, root: Optional[Path] = None,
 
     folder_specs = {
         "assets/": "Drop screenshots and icons here.",
-        "plugins/": "Drop-in Python packages that add commands.",
+        "plugins/": "Drop-in Python packages that add commands. Rename `_example.py` to enable the bundled demo.",
         "modules/": "Helper modules shared across plugins.",
         "commands/": "Stand-alone command implementations.",
         "themes/": "Custom theme JSON files.",
@@ -279,6 +279,9 @@ def generate_project(branding: Branding, *, root: Optional[Path] = None,
     }
     for folder, msg in folder_specs.items():
         _empty_readme(target, folder, message=msg)
+
+    # Ship the example plugin (disabled by default — starts with underscore).
+    _copy_template(target, "plugins/_example.py", "plugins/_example.py.tpl", tokens)
 
     if progress:
         progress("Writing generated Python sources")
@@ -301,6 +304,9 @@ def generate_project(branding: Branding, *, root: Optional[Path] = None,
     _copy_template(target, "requirements.txt", "requirements.txt.tpl", tokens)
     _copy_template(target, "LICENSE", "LICENSE.tpl", tokens)
     _copy_template(target, "CHANGELOG.md", "CHANGELOG.md.tpl", tokens)
+    _copy_template(target, "SECURITY.md", "SECURITY.md.tpl", tokens)
+    _copy_template(target, "CONTRIBUTING.md", "CONTRIBUTING.md.tpl", tokens)
+    _copy_template(target, "CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT.md.tpl", tokens)
     _copy_template(target, ".gitignore", "gitignore.tpl", tokens)
     _copy_template(target, "pyproject.toml", "pyproject.toml.tpl", tokens)
     _copy_template(target, "config.json", "config.json.tpl", tokens)

@@ -9,6 +9,7 @@ from rich.panel import Panel
 from ..categories import list_categories, subcategories_for, suggest_entrypoint
 from ..core.config import UserSettings
 from ..models import Branding, slugify
+from ..profiles import list_profiles, load_profile, save_profile
 from ..ui.banners import STYLE_PRESETS
 from ..ui.menu import MENU_STYLES
 from ..ui.animations import ANIMATION_NAMES
@@ -123,25 +124,39 @@ def run_branding_wizard(theme: Theme, settings: UserSettings,
 
 def run_quick_branding(theme: Theme, settings: UserSettings) -> Optional[Branding]:
     """A fast path that only asks the essentials, using defaults for the rest."""
-    b = Branding(
+    _hr(theme, "Quick Branding")
+    # Offer profile loading.
+    profiles = list_profiles()
+    loaded: Optional[Branding] = None
+    if profiles and confirm(f"Load a saved profile? ({len(profiles)} available)", False):
+        names = [p.stem for p in profiles]
+        choice = choose("Profile", names)
+        if choice:
+            loaded = load_profile(choice)
+    b = loaded or Branding(
         author=settings.default_author,
         github=settings.default_github,
         instagram=settings.default_instagram,
         license=settings.default_license,
         theme=settings.default_theme,
     )
-    _hr(theme, "Quick Branding")
-    b.project_name = ask("Project name", "ForgeCLI Tool")
+    b.project_name = ask("Project name", b.project_name or "ForgeCLI Tool")
     if not b.project_name:
         return None
     b.command_name = ask("Command name",
-                         suggest_entrypoint(b.project_name))
-    b.tagline = ask("Tagline", b.tagline)
-    b.description = ask("Short description", b.description)
-    b.category = choose("Tool category", list_categories(), default="CLI Utility") or "CLI Utility"
+                         b.command_name or suggest_entrypoint(b.project_name))
+    b.tagline = ask("Tagline", b.tagline or "Built with ForgeCLI")
+    b.description = ask("Short description",
+                        b.description or "A terminal tool built with ForgeCLI.")
+    b.category = choose("Tool category", list_categories(), default=b.category or "CLI Utility") or "CLI Utility"
     subs = subcategories_for(b.category)
-    b.subcategory = choose(f"Subcategory ({b.category})", subs, default=subs[0]) or subs[0]
-    b.theme = choose("Theme", build_registry().names, default=settings.default_theme) or "Cyberpunk"
+    b.subcategory = choose(f"Subcategory ({b.category})", subs, default=b.subcategory or subs[0]) or subs[0]
+    b.theme = choose("Theme", build_registry().names, default=b.theme) or "Cyberpunk"
+    if confirm("Save this branding as a reusable profile?", False):
+        name = ask("Profile name", slugify(b.project_name))
+        if name:
+            save_profile(name, b)
+            console.print(f"[{theme.success}]Saved profile '{name}'.[/]")
     return b
 
 

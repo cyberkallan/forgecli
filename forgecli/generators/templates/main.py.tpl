@@ -6,6 +6,32 @@ from __future__ import annotations
 import os
 import sys
 
+
+def _force_utf8_io() -> None:
+    """Force UTF-8 on stdout/stderr so ``rich`` can print any character.
+
+    On Windows, the default console codepage is often cp1252 or similar,
+    which causes ``UnicodeEncodeError`` when rendering box-drawing, emoji,
+    or any non-Latin glyphs. This reconfigures the streams in place when
+    possible and falls back to ``PYTHONIOENCODING`` for the rare cases
+    where the handles aren't reconfigurable (e.g. a non-standard wrapper).
+    """
+    if sys.platform.startswith("win"):
+        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+        for stream_name in ("stdout", "stderr"):
+            stream = getattr(sys, stream_name, None)
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                try:
+                    reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    # If we can't reconfigure, the env var above still nudges
+                    # child interpreters and ``io`` wrappers toward UTF-8.
+                    pass
+
+
+_force_utf8_io()
+
 # Auto-install runtime dependencies the first time we run.
 from installer import ensure_runtime_dependencies  # noqa: E402
 
@@ -24,6 +50,38 @@ from ui import info_table, make_ctx, render_menu, run_startup_animation
 from utils import collect_system_info
 from updater import check_for_update
 from commands import commands_for
+
+
+def _load_plugins(ctx) -> list:
+    """Auto-discover drop-in plugins under ./plugins/*.py.
+
+    Each plugin may expose ``register(ctx) -> [(label, callable), ...]`` which
+    returns commands to merge into the menu. Plugins that fail to load are
+    reported but never crash the tool.
+    """
+    import importlib.util
+    import traceback
+    plugins_dir = os.path.join(os.path.dirname(__file__), "plugins")
+    merged = []
+    if not os.path.isdir(plugins_dir):
+        return merged
+    for path in sorted(os.listdir(plugins_dir)):
+        if not path.endswith(".py") or path.startswith("_"):
+            continue
+        name = path[:-3]
+        try:
+            spec = importlib.util.spec_from_file_location(f"plugin_{name}",
+                                                          os.path.join(plugins_dir, path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            register = getattr(mod, "register", None)
+            if callable(register):
+                extra = register(ctx) or []
+                merged.extend(extra)
+        except Exception:  # a broken plugin must not kill the tool
+            print(f"[plugin {name}] failed to load:")
+            traceback.print_exc()
+    return merged
 
 
 PROJECT_NAME = "{{PROJECT_NAME}}"
@@ -57,6 +115,7 @@ def main() -> int:
             pass
 
     commands = commands_for(CATEGORY, SUBCATEGORY)
+    commands = list(commands) + _load_plugins(ctx)
 
     while True:
         if not commands:

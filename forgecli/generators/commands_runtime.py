@@ -12,61 +12,71 @@ from typing import List, Tuple
 
 Command = Tuple[str, None]
 
+
 COMMANDS: dict[str, dict[str, List[str]]] = {
     "Cybersecurity": {
-        "Port Scanner": ["TCP connect scan"],
-        "DNS": ["Lookup A/AAAA"],
+        "Port Scanner": ["TCP connect scan", "Subnet calculator", "SSL/TLS cert scan",
+                         "ARP scan (local)", "HTTP methods probe", "Headers dump"],
+        "DNS": ["Lookup A/AAAA", "Reverse DNS", "SPF / DMARC"],
         "WHOIS": ["Lookup"],
-        "Hash Tool": ["Compute hash"],
+        "Hash Tool": ["Compute hash", "Dictionary cracker", "Hash a file", "HMAC"],
         "Encryption": ["Symmetric encrypt/decrypt"],
-        "Encoding": ["Encoder/Decoder"],
+        "Encoding": ["Encoder/Decoder", "Base58"],
         "Reverse Shell Helper": ["One-liner generator"],
         "Payload Generator": ["msfvenom template"],
-        "Web Scanner": ["HTTP header check"],
-        "Recon": ["Domain recon"],
-        "Network Monitor": ["/proc/net/dev sampler"],
+        "Web Scanner": ["HTTP header check", "Directory buster", "JWT decode",
+                        "robots.txt parser", "Sitemap parser", "URL unshortener"],
+        "Recon": ["Domain recon", "Wayback Machine lookup",
+                  "Certificate Transparency (crt.sh)", "GitHub user"],
+        "Network Monitor": ["/proc/net/dev sampler", "Headers dump"],
         "Log Analyzer": ["Count by level"],
-        "CTF Tool": ["Encoder toolbox"],
+        "CTF Tool": ["Encoder toolbox", "All Caesar shifts (ROT)", "Vigenere cipher",
+                     "Morse code", "JSON pretty / minify", "Hexdump", "Diff two strings"],
         "Custom": ["OSINT username search", "WiFi scan", "Bluetooth scan",
-                    "Packet analyzer"],
+                   "Packet analyzer", "MAC vendor lookup"],
     },
     "Networking": {
-        "Port Scanner": ["TCP connect scan"],
-        "DNS": ["Lookup A/AAAA"],
+        "Port Scanner": ["TCP connect scan", "Subnet calculator", "ARP scan",
+                         "HTTP methods probe"],
+        "DNS": ["Lookup A/AAAA", "Reverse DNS", "SPF / DMARC"],
         "Ping Sweep": ["CIDR ping sweep"],
         "Traceroute": ["Run traceroute"],
         "Bandwidth Monitor": ["Download speed test"],
         "Port Forwarder": ["TCP forwarder"],
         "DNS Lookup": ["Lookup A/AAAA"],
-        "Custom": ["Domain recon"],
+        "Custom": ["Domain recon", "Headers dump"],
     },
     "Developer": {
         "Code Generator": ["Snippet manager"],
         "Boilerplate": ["Snippet manager"],
-        "Git Helper": ["System info"],
+        "Git Helper": ["GitHub user info", "List GitHub repos", "System info"],
         "Regex Tester": ["Run regex"],
         "Snippet Manager": ["Manage snippets"],
-        "Custom": ["Regex tester"],
+        "UUID Tool": ["Generate / parse UUID"],
+        "Timestamp": ["Unix <> ISO"],
+        "Custom": ["JSON pretty / minify", "TOML viewer"],
     },
     "Automation": {
         "Task Runner": ["Todo list"],
-        "File Batch": ["System info"],
-        "Web Scraper": ["Scrape links"],
-        "Scheduler": ["Timer"],
-        "Custom": ["Todo"],
+        "File Batch": ["Hexdump a file", "Hash a file", "Inspect zip"],
+        "Web Scraper": ["Scrape links", "Sitemap parser", "robots.txt parser"],
+        "Scheduler": ["Timer", "Cron builder"],
+        "Custom": ["Todo list"],
     },
     "API": {
-        "REST Client": ["REST request"],
+        "REST Client": ["REST request", "Headers dump", "HTTP methods probe"],
         "GraphQL Client": ["REST request (fallback)"],
         "Webhook Server": ["Run webhook server"],
         "Mock Server": ["Run webhook server (mock)"],
         "Custom": ["REST request"],
     },
     "OSINT": {
-        "Username Lookup": ["Cross-site search"],
-        "Email Recon": ["Resolve & WHOIS"],
-        "Domain Recon": ["DNS + robots + security.txt"],
+        "Username Lookup": ["Cross-site search", "GitHub user", "GitHub repos"],
+        "Email Recon": ["MX + DMARC"],
+        "Domain Recon": ["DNS + robots + security.txt", "Wayback",
+                         "Certificate Transparency", "SPF / DMARC", "Reverse DNS"],
         "Social Scan": ["Cross-site search"],
+        "Geolocation": ["IP geolocation"],
         "Custom": ["Domain recon"],
     },
     "Bluetooth": {
@@ -76,7 +86,7 @@ COMMANDS: dict[str, dict[str, List[str]]] = {
         "Custom": ["Bluetooth scan"],
     },
     "WiFi": {
-        "Network Scan": ["nmcli/iwlist scan"],
+        "Network Scan": ["nmcli/iwlist scan", "MAC vendor lookup"],
         "Handshake Capture Helper": ["WiFi scan"],
         "Signal Mapper": ["WiFi scan"],
         "Custom": ["WiFi scan"],
@@ -87,7 +97,7 @@ COMMANDS: dict[str, dict[str, List[str]]] = {
         "Custom": ["System info"],
     },
     "Hardware": {
-        "Serial Monitor": ["List serial ports"],
+        "Serial Monitor": ["List serial ports", "Hexdump a file"],
         "Flasher": ["System info"],
         "Sensor Reader": ["System info"],
         "Custom": ["Serial monitor"],
@@ -104,17 +114,21 @@ COMMANDS: dict[str, dict[str, List[str]]] = {
         "Custom": ["Serial monitor"],
     },
     "IoT": {
-        "Device Discovery": ["mDNS browse"],
+        "Device Discovery": ["mDNS browse", "MAC vendor lookup"],
         "MQTT Client": ["mDNS browse"],
         "Telemetry Viewer": ["System info"],
         "Custom": ["mDNS browse"],
     },
     "CLI Utility": {
-        "Calculator": ["Evaluate expression"],
+        "Calculator": ["Evaluate expression", "Unit converter", "Color converter",
+                       "Color palette", "Base converter"],
         "Unit Converter": ["Convert units"],
-        "Password Gen": ["Generate password"],
-        "Color Tool": ["Convert colors"],
-        "Custom": ["Calculator", "Color tool"],
+        "Password Gen": ["Generate password", "Generate secure token", "UUID generator"],
+        "Color Tool": ["Convert colors", "Generate palette"],
+        "Encoder": ["Encoder/Decoder", "Morse code", "ROT all shifts", "Vigenere cipher",
+                    "JSON pretty / minify", "TOML viewer", "Diff two strings",
+                    "Word count", "Timestamp conversion"],
+        "Custom": ["Calculator", "Color tool", "UUID generator"],
     },
     "AI": {
         "Prompt Runner": ["REST request (LLM endpoint)"],
@@ -129,26 +143,27 @@ COMMANDS: dict[str, dict[str, List[str]]] = {
         "Custom": ["REST request"],
     },
     "Forensics": {
-        "Disk Image": ["Hash file"],
-        "Memory Dump": ["Hash file"],
+        "Disk Image": ["Hash a file", "Hexdump"],
+        "Memory Dump": ["Hash a file", "Hexdump"],
         "Timeline Builder": ["Log analyzer"],
+        "Zip Inspection": ["Inspect zip"],
         "Custom": ["Hash file"],
     },
     "Password Tools": {
-        "Generator": ["Generate password"],
+        "Generator": ["Generate password", "Generate secure token"],
         "Strength Meter": ["Measure entropy"],
-        "Hash Cracker Helper": ["Compute hash"],
+        "Hash Cracker Helper": ["Dictionary cracker"],
         "Vault": ["Snippet manager"],
         "Custom": ["Password generator"],
     },
     "Monitoring": {
-        "System Watcher": ["Network sampler"],
+        "System Watcher": ["Network sampler", "ARP scan"],
         "Log Tail": ["Log analyzer"],
-        "Uptime Pinger": ["Ping sweep"],
+        "Uptime Pinger": ["Ping sweep", "Traceroute"],
         "Custom": ["Network monitor"],
     },
     "Discord": {
-        "Bot Template": ["REST request (Discord API)"],
+        "Bot Template": ["REST request (Discord API)", "Webhook server"],
         "Webhook Sender": ["REST request (Discord API)"],
         "Message Logger": ["Webhook server"],
         "Custom": ["REST request"],
@@ -165,26 +180,31 @@ COMMANDS: dict[str, dict[str, List[str]]] = {
     },
     "Crypto": {
         "Price Tracker": ["Fetch live price"],
-        "Wallet Tool": ["Hash helper"],
-        "Transaction Decoder": ["Hex decode"],
+        "Wallet Tool": ["Hash helper", "Generate token"],
+        "Transaction Decoder": ["Hex decode", "Base58"],
         "Custom": ["Price tracker"],
     },
     "Productivity": {
         "Todo": ["Todo list"],
         "Notes": ["Snippet manager"],
-        "Timer": ["Countdown"],
+        "Timer": ["Countdown", "Cron builder"],
         "Kanban": ["Todo list"],
-        "Custom": ["Todo"],
+        "Text Tools": ["Word count", "Diff two strings", "JSON pretty / minify"],
+        "Custom": ["Todo list"],
     },
     "Custom": {
-        "Custom": ["System info", "Help"],
+        "Custom": ["System info", "Help", "Generate password", "UUID generator",
+                   "Timestamp conversion", "JSON pretty / minify"],
     },
 }
 
 
 def commands_for(category: str, subcategory: str) -> List[Command]:
     bucket = COMMANDS.get(category, {})
-    names = bucket.get(subcategory, bucket.get("Custom", []))
+    if isinstance(bucket, dict):
+        names = bucket.get(subcategory, bucket.get("Custom", []))
+    else:
+        names = bucket
     return [(name, None) for name in names]
 
 

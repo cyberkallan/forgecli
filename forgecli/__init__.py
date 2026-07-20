@@ -4,7 +4,7 @@ Generate production-quality CLI applications from user input.
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Arjun TM"
 __github__ = "https://github.com/cyberkallan"
 __instagram__ = "https://instagram.com/imarjunarz"

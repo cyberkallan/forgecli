@@ -274,6 +274,128 @@ def custom_animation(console: Console, theme: Theme, duration: float, message: s
     _run_frames(console, frame, duration, speed)
 
 
+def typewriter_animation(console: Console, theme: Theme, duration: float, message: str,
+                          speed: float = 1.0) -> None:
+    """Reveal ``message`` one character at a time, then hold."""
+    interval = max(0.02, _fps_to_interval(speed) / 3)
+    full = message + "  ▍"
+    def frame(i: int) -> object:
+        n = min(len(full), i + 1)
+        shown = full[:n] + ("▍" if n < len(full) else "")
+        return Text.from_markup(f"[{theme.primary}]{shown}[/]")
+    end = time.monotonic() + duration
+    i = 0
+    try:
+        with Live(frame_fn_result(frame, i), console=console, refresh_per_second=int(1 / interval),
+                   transient=True) as live:
+            while time.monotonic() < end:
+                live.update(frame(i))
+                i += 1
+                time.sleep(interval)
+    except Exception as exc:  # pragma: no cover
+        _LOG.debug("Typewriter interrupted: %s", exc)
+
+
+def frame_fn_result(frame, i):
+    return frame(i)
+
+
+def glitch_text_animation(console: Console, theme: Theme, duration: float, message: str,
+                            speed: float = 1.0) -> None:
+    """Flicker ``message`` with glitchy replacement characters."""
+    glitch = "▓▒░§¶∞∆◊≈≠"
+    def frame(i: int) -> object:
+        out = []
+        for ch in message:
+            if ch != " " and i % 5 == 0 and random.random() < 0.3:
+                out.append(random.choice(glitch))
+            else:
+                out.append(ch)
+        return Text.from_markup(f"[{theme.primary}]{''.join(out)}[/]",
+                                 justify="center")
+    _run_frames(console, frame, duration, speed)
+
+
+def scanlines_animation(console: Console, theme: Theme, duration: float, message: str,
+                         speed: float = 1.0) -> None:
+    """CRT scanlines sweeping over a message."""
+    h = max(6, min(12, console.size.height - 4))
+    def frame(i: int) -> object:
+        sweep = i % h
+        rows = []
+        for y in range(h):
+            line = ("█" * 30) if y == sweep else ("▒" * 30 if (y + i) % 3 == 0 else " " * 30)
+            rows.append(f"[{theme.primary}]{line}[/]")
+        rows[h // 2] = f"[{theme.secondary}]{message.center(30)}[/]"
+        return Panel(Text.from_markup("\n".join(rows)), border_style=theme.border)
+    _run_frames(console, frame, duration, speed)
+
+
+def crt_flicker_animation(console: Console, theme: Theme, duration: float, message: str,
+                           speed: float = 1.0) -> None:
+    """Flicker the message like a fading CRT."""
+    palette = [theme.primary, theme.secondary, theme.muted]
+    def frame(i: int) -> object:
+        color = palette[(i + (1 if random.random() < 0.2 else 0)) % len(palette)]
+        return Text.from_markup(f"[{color}]{message}[/]", justify="center")
+    _run_frames(console, frame, duration, speed)
+
+
+def fireworks_animation(console: Console, theme: Theme, duration: float, message: str,
+                         speed: float = 1.0) -> None:
+    """Burst fireworks made of theme glyphs."""
+    sparks = "*+•.✦✧"
+    palette = theme.gradient or [theme.primary, theme.secondary, theme.success]
+    def frame(i: int) -> object:
+        rows = []
+        for _ in range(6):
+            line = "".join(random.choice(sparks) if random.random() < 0.4 else " "
+                           for _ in range(36))
+            color = palette[random.randrange(len(palette))]
+            rows.append(f"[{color}]{line}[/]")
+        rows[5] = f"[{theme.secondary}]{message.center(36)}[/]"
+        return Panel(Text.from_markup("\n".join(rows)), border_style=theme.border)
+    _run_frames(console, frame, duration, speed)
+
+
+def snow_animation(console: Console, theme: Theme, duration: float, message: str,
+                    speed: float = 1.0) -> None:
+    """Gentle snowfall over a message."""
+    flakes = "❄❅❆✻"
+    def frame(i: int) -> object:
+        rows = []
+        for _ in range(6):
+            line = "".join(random.choice(flakes) if random.random() < 0.25 else " "
+                           for _ in range(36))
+            rows.append(f"[{theme.fg}]{line}[/]")
+        rows[3] = f"[{theme.primary}]{message.center(36)}[/]"
+        return Panel(Text.from_markup("\n".join(rows)), border_style=theme.border)
+    _run_frames(console, frame, duration, speed)
+
+
+def ascii_wave_animation(console: Console, theme: Theme, duration: float, message: str,
+                          speed: float = 1.0) -> None:
+    """A sine-wave of glyphs scrolling across."""
+    import math
+    width = max(30, min(60, console.size.width - 4))
+    def frame(i: int) -> object:
+        rows = []
+        for y in range(5):
+            line = []
+            for x in range(width):
+                v = math.sin((x + i) * 0.3 + y * 0.6)
+                if v > 0.6:
+                    line.append(f"[{theme.primary}]█[/]")
+                elif v > 0:
+                    line.append(f"[{theme.secondary}]▄[/]")
+                else:
+                    line.append(" ")
+            rows.append("".join(line))
+        rows.append(f"[{theme.info}]{message}[/]")
+        return Text.from_markup("\n".join(rows))
+    _run_frames(console, frame, duration, speed)
+
+
 # ---- Registry --------------------------------------------------------------
 
 ANIMATIONS = {
@@ -289,6 +411,13 @@ ANIMATIONS = {
     "Terminal Boot": terminal_boot_animation,
     "Boot Loader": boot_loader_animation,
     "Retro BIOS": retro_bios_animation,
+    "Typewriter": typewriter_animation,
+    "Glitch Text": glitch_text_animation,
+    "Scanlines": scanlines_animation,
+    "CRT Flicker": crt_flicker_animation,
+    "Fireworks": fireworks_animation,
+    "Snow": snow_animation,
+    "ASCII Wave": ascii_wave_animation,
     "Custom Animation": custom_animation,
 }
 

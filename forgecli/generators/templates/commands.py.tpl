@@ -38,6 +38,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 import zlib
 from typing import Callable, Dict, List, Tuple
 
@@ -928,61 +929,826 @@ def cmd_help(ctx):
 # Command registry
 # ============================================================
 
-COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
+def cmd_subnet_calc(ctx):
+    """Compute network, broadcast, host range from a CIDR."""
+    import ipaddress
+    target = ctx["ask"]("CIDR (e.g. 192.168.1.0/24)", "192.168.1.0/24")
+    try:
+        net = ipaddress.ip_network(target, strict=False)
+    except ValueError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Bad CIDR: {exc}[/]")
+        return
+    rows = [
+        ("Network", str(net.network_address)),
+        ("Broadcast", str(net.broadcast_address)),
+        ("Netmask", str(net.netmask)),
+        ("Hosts", str(net.num_addresses - 2 if net.prefixlen <= 30 else net.num_addresses)),
+        ("First host", str(net.network_address + 1)),
+        ("Last host", str(net.broadcast_address - 1)),
+        ("Version", "IPv6" if net.version == 6 else "IPv4"),
+    ]
+    _print_table(ctx, rows, ("Field", "Value"))
+
+
+def cmd_dir_buster(ctx):
+    """HTTP directory buster against a small built-in wordlist."""
+    base = ctx["ask"]("Base URL (https://site/)", "https://example.com/").rstrip("/")
+    wordlist = ["admin", "login", "dashboard", "api", "config", "backup",
+                ".env", "robots.txt", "sitemap.xml", "uploads", "static",
+                "test", "old", "dev", "phpinfo.php", "wp-admin", ".git/config"]
+    found = []
+    ctx["console"].print(f"[{ctx['theme'].info}]Probing {len(wordlist)} paths ...[/]")
+    for word in wordlist:
+        url = f"{base}/{word}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "{{PROJECT_NAME}}/1.0"})
+            with urllib.request.urlopen(req, timeout=4) as r:
+                found.append((word, r.status, r.geturl()))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                found.append((word, exc.code, "auth-protected"))
+        except urllib.error.URLError:
+            continue
+    rows = found or [("none", 0, "")]
+    _print_table(ctx, rows, ("Path", "Status", "Note"))
+
+
+def cmd_hash_cracker(ctx):
+    """Dictionary attack against a hash using a built-in wordlist."""
+    algo = ctx["choose"]("Algorithm", sorted(hashlib.algorithms_guaranteed)) or "sha256"
+    target = ctx["ask"]("Target hash (hex)").strip().lower()
+    if not target:
+        return
+    wordlist = ["password", "123456", "admin", "root", "letmein", "qwerty",
+                "welcome", "monkey", "dragon", "secret", "passw0rd",
+                "iloveyou", "sunshine", "football", "12345678", "1234567890"]
+    for word in wordlist:
+        if hashlib.new(algo, word.encode()).hexdigest() == target:
+            ctx["console"].print(f"[{ctx['theme'].success}]Cracked:[/] {word}")
+            return
+    ctx["console"].print(f"[{ctx['theme'].warning}]No match in built-in wordlist ({len(wordlist)} words).[/]")
+
+
+def cmd_jwt_decode(ctx):
+    """Decode a JWT's header and payload (no signature verification)."""
+    token = ctx["ask"]("JWT").strip()
+    if not token or token.count(".") < 2:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not a JWT.[/]")
+        return
+    def _b64(seg):
+        pad = "=" * (-len(seg) % 4)
+        return base64.urlsafe_b64decode(seg + pad).decode("utf-8", "replace")
+    header, payload, _sig = token.split(".")[0:3]
+    rows = [
+        ("Header", json.dumps(json.loads(_b64(header)), indent=2)),
+        ("Payload", json.dumps(json.loads(_b64(payload)), indent=2)),
+    ]
+    _print_table(ctx, rows, ("Part", "Content"))
+
+
+def cmd_ssl_scan(ctx):
+    """Fetch a TLS certificate and show issuer/validity."""
+    host = ctx["ask"]("Host", "example.com")
+    try:
+        port = int(ctx["ask"]("Port", "443"))
+    except ValueError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Port must be a number: {exc}[/]")
+        return
+    import ssl
+    ctx = _with_attr(ctx, "_ssl_ctx", ssl.create_default_context())
+    try:
+        with socket.create_connection((host, port), timeout=8) as sock:
+            with ctx["_ssl_ctx"].wrap_socket(sock, server_hostname=host) as ssock:
+                cert = ssock.getpeercert()
+        subject = dict(x[0] for x in cert.get("subject", ()))
+        issuer = dict(x[0] for x in cert.get("issuer", ()))
+        rows = [
+            ("Subject CN", subject.get("commonName", "")),
+            ("Issuer", issuer.get("commonName", issuer.get("organizationName", ""))),
+            ("Not before", cert.get("notBefore", "")),
+            ("Not after", cert.get("notAfter", "")),
+            ("Serial", cert.get("serialNumber", "")),
+        ]
+        _print_table(ctx, rows, ("Field", "Value"))
+    except (ssl.SSLError, OSError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]TLS fetch failed: {exc}[/]")
+
+
+def _with_attr(d, k, v):
+    d[k] = v
+    return d
+
+
+def cmd_mac_vendor(ctx):
+    """Look up the vendor for a MAC address via the macvendors.com API."""
+    mac = ctx["ask"]("MAC (e.g. 00:1A:2B:3C:4D:5E)", "00:1A:2B:3C:4D:5E").strip()
+    clean = re.sub(r"[^0-9a-fA-F]", "", mac)[:6].lower()
+    if len(clean) < 6:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Need at least 6 hex digits (OUI).[/]")
+        return
+    try:
+        with urllib.request.urlopen(f"https://api.macvendors.com/{clean}", timeout=6) as r:
+            vendor = r.read().decode("utf-8", "replace")
+        ctx["console"].print(f"[{ctx['theme'].primary}]{mac}[/] -> [{ctx['theme'].fg}]{vendor}[/]")
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Lookup failed: {exc}[/]")
+
+
+def cmd_arp_scan(ctx):
+    """Parse the local ARP table."""
+    code, out, err = _safe_run(["arp", "-a"], timeout=5)
+    if code != 0:
+        code, out, _ = _safe_run(["ip", "neigh"], timeout=5)
+    if code != 0:
+        ctx["console"].print(f"[{ctx['theme'].warning}]arp/ip unavailable on this OS.[/]")
+        return
+    rows = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and "." in parts[0]:
+            rows.append((parts[1], parts[0]))
+        elif len(parts) >= 5 and parts[1] == "dev":
+            rows.append((parts[0], parts[2]))
+    _print_table(ctx, rows[:50], ("MAC / IP", "Interface / Type"))
+
+
+def cmd_wayback(ctx):
+    """Query the Wayback Machine CDX API for archived snapshots."""
+    url = ctx["ask"]("URL", "example.com")
+    api = f"http://web.archive.org/cdx/search/cdx?url={urllib.parse.quote(url)}&limit=20&output=json"
+    try:
+        with urllib.request.urlopen(api, timeout=10) as r:
+            data = json.loads(r.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Wayback query failed: {exc}[/]")
+        return
+    if len(data) < 2:
+        ctx["console"].print("[yellow]No snapshots found.[/]")
+        return
+    rows = [(row[1], row[2], row[4]) for row in data[1:]]
+    _print_table(ctx, rows, ("Timestamp", "Original", "Status"))
+
+
+def cmd_cert_transparency(ctx):
+    """Search crt.sh certificate transparency logs for a domain."""
+    domain = ctx["ask"]("Domain", "example.com")
+    api = f"https://crt.sh/?q={urllib.parse.quote('%.' + domain)}&output=json"
+    try:
+        with urllib.request.urlopen(api, timeout=10) as r:
+            data = json.loads(r.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]crt.sh query failed: {exc}[/]")
+        return
+    rows = []
+    seen = set()
+    for entry in data[:50]:
+        name = entry.get("name_value", "").split("\n")[0]
+        if name and name not in seen:
+            seen.add(name)
+            rows.append((entry.get("not_before", ""), name))
+    _print_table(ctx, rows[:30], ("Issued", "Certificate name"))
+
+
+def cmd_reverse_dns(ctx):
+    """Reverse-resolve an IP."""
+    ip = ctx["ask"]("IP", "8.8.8.8")
+    try:
+        host, _aliases, _ips = socket.gethostbyaddr(ip)
+        ctx["console"].print(f"[{ctx['theme'].primary}]{ip}[/] -> [{ctx['theme'].fg}]{host}[/]")
+    except socket.herror:
+        ctx["console"].print(f"[{ctx['theme'].warning}]No PTR record.[/]")
+
+
+def _dns_json(ctx, name, rtype="TXT"):
+    """Resolve DNS records via the Google DNS over HTTPS JSON API (stdlib only)."""
+    url = f"https://dns.google/resolve?name={urllib.parse.quote(name)}&type={rtype}"
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            return json.loads(r.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]DNS query failed: {exc}[/]")
+        return None
+
+
+def cmd_spf_dmarc(ctx):
+    """Show SPF and DMARC records for a domain."""
+    domain = ctx["ask"]("Domain", "example.com")
+    for rtype, label in (("TXT", f"SPF/TXT for {domain}"), ("TXT", f"DMARC for {domain}")):
+        name = f"_dmarc.{domain}" if "DMARC" in label else domain
+        data = _dns_json(ctx, name, rtype)
+        if not data:
+            continue
+        answers = [a for a in data.get("Answer", [])
+                   if ("v=spf1" in a.get("data", "") if "SPF" in label
+                       else "v=DMARC" in a.get("data", "").upper())]
+        ctx["console"].print(f"[bold]{label}[/]")
+        for a in answers or []:
+            ctx["console"].print(f"  {a['data']}")
+        if not answers:
+            ctx["console"].print(f"  [yellow](none)[/]")
+
+
+def cmd_email_validate(ctx):
+    """Validate email syntax and check MX records exist."""
+    email = ctx["ask"]("Email", "test@example.com").strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Invalid syntax.[/]")
+        return
+    domain = email.split("@", 1)[1]
+    data = _dns_json(ctx, domain, "MX")
+    mx = [a["data"] for a in (data or {}).get("Answer", []) if a.get("type") == 15]
+    rows = [
+        ("Syntax", "valid"),
+        ("Domain", domain),
+        ("Mail servers", ", ".join(mx) or "none"),
+    ]
+    _print_table(ctx, rows, ("Check", "Result"))
+
+
+def cmd_uuid_tool(ctx):
+    op = ctx["choose"]("Operation", ["generate v4", "parse"]) or "generate v4"
+    if op == "generate v4":
+        ctx["console"].print(f"[{ctx['theme'].primary}]{uuid.uuid4()}[/]")
+    else:
+        u = ctx["ask"]("UUID", str(uuid.uuid4()))
+        try:
+            parsed = uuid.UUID(u)
+            rows = [("Version", f"v{parsed.version}"), ("Variant", str(parsed.variant)),
+                    ("Hex", parsed.hex), ("Int", str(parsed.int))]
+            _print_table(ctx, rows, ("Field", "Value"))
+        except ValueError as exc:
+            ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_vin_check(ctx):
+    """Validate a VIN using the real ISO 3779 checksum algorithm."""
+    vin = ctx["ask"]("VIN (17 chars)", "1HGCM82633A123456").strip().upper()
+    if len(vin) != 17:
+        ctx["console"].print(f"[{ctx['theme'].danger}]VIN must be 17 chars.[/]")
+        return
+    translit = {c: i for i, c in enumerate("ABCDEFGHJKLMNPRSTUVWXYZ")}
+    weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+    try:
+        total = 0
+        for i, ch in enumerate(vin):
+            if ch.isdigit():
+                val = int(ch)
+            elif ch in translit:
+                val = translit[ch]
+            else:
+                raise ValueError(f"Invalid char {ch}")
+            total += val * weights[i]
+        check = total % 11
+        computed = "X" if check == 10 else str(check)
+        valid = computed == vin[8]
+        ctx["console"].print(f"[{ctx['theme'].success if valid else ctx['theme'].danger}]"
+                              f"Check digit {vin[8]} (computed {computed}) - "
+                              f"{'VALID' if valid else 'INVALID'}[/]")
+    except ValueError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def cmd_base58(ctx):
+    op = ctx["choose"]("Operation", ["encode", "decode"]) or "encode"
+    text = ctx["ask"]("Input")
+    try:
+        if op == "encode":
+            n = int.from_bytes(text.encode("utf-8"), "big") or 0
+            out = ""
+            while n > 0:
+                n, r = divmod(n, 58)
+                out = _B58[r] + out
+            for b in text.encode("utf-8"):
+                if b == 0:
+                    out = "1" + out
+                else:
+                    break
+            ctx["console"].print(out)
+        else:
+            n = 0
+            for ch in text:
+                n = n * 58 + _B58.index(ch)
+            ctx["console"].print(n.to_bytes((n.bit_length() + 7) // 8, "big").decode("utf-8", "replace"))
+    except (ValueError, IndexError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_hmac_tool(ctx):
+    algo = ctx["choose"]("Algorithm", sorted(hashlib.algorithms_guaranteed)) or "sha256"
+    msg = ctx["ask"]("Message")
+    key = getpass.getpass("Key: ")
+    mac = hmac.new(key.encode("utf-8"), msg.encode("utf-8"), algo).hexdigest()
+    ctx["console"].print(f"[{ctx['theme'].primary}]{algo}[/]: {mac}")
+
+
+def cmd_cron_builder(ctx):
+    """Build a cron expression field-by-field and describe it."""
+    fields = {}
+    for field, default in (("minute", "*"), ("hour", "*"), ("day-of-month", "*"),
+                            ("month", "*"), ("day-of-week", "*")):
+        fields[field] = ctx["ask"](field, default) or "*"
+    expr = " ".join(fields[field] for field in
+                    ("minute", "hour", "day-of-month", "month", "day-of-week"))
+    ctx["console"].print(f"[bold]Cron:[/] {expr}")
+    hint = []
+    if fields["minute"] != "*" and fields["hour"] != "*":
+        hint.append(f"At {fields['hour']}:{fields['minute'].zfill(2)}")
+    ctx["console"].print(f"[dim]{'; '.join(hint) or 'See crontab.guru for full meaning'}[/]")
+
+
+def cmd_json_pretty(ctx):
+    raw = ctx["ask"]("JSON (or path to file)")
+    if os.path.isfile(raw):
+        raw = open(raw, encoding="utf-8").read()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Invalid JSON: {exc}[/]")
+        return
+    op = ctx["choose"]("Output", ["pretty", "minify", "keys"]) or "pretty"
+    if op == "pretty":
+        ctx["console"].print_json(json.dumps(data, indent=2))
+    elif op == "minify":
+        ctx["console"].print(json.dumps(data, separators=(",", ":")))
+    else:
+        for k in data.keys() if isinstance(data, dict) else []:
+            ctx["console"].print(f"  {k}")
+
+
+def cmd_toml_view(ctx):
+    """Parse a TOML file (Python 3.11+ tomllib)."""
+    path = ctx["ask"]("TOML file path", "pyproject.toml")
+    if not os.path.isfile(path):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not found.[/]")
+        return
+    try:
+        import tomllib
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+        ctx["console"].print_json(json.dumps(data, indent=2, default=str))
+    except ImportError:
+        ctx["console"].print(f"[{ctx['theme'].warning}]tomllib needs Python 3.11+.[/]")
+    except Exception as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_mime_sniff(ctx):
+    """Sniff a file's type from its magic bytes (stdlib mimetypes + heuristics)."""
+    path = ctx["ask"]("File path")
+    if not os.path.isfile(path):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not found.[/]")
+        return
+    import mimetypes
+    head = open(path, "rb").read(16)
+    rows = [("Path", path), ("Size", _human_read(len(open(path,'rb').read()))),
+            ("Guess", mimetypes.guess_type(path)[0] or "unknown"),
+            ("First bytes", head.hex())]
+    _print_table(ctx, rows, ("Field", "Value"))
+
+
+def _human_read(n):
+    for u in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def cmd_url_unshorten(ctx):
+    """Follow redirects and show the final URL."""
+    url = ctx["ask"]("Short URL", "https://bit.ly/example")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ctx["console"].print(f"[bold]Final:[/] {r.geturl()}")
+            ctx["console"].print(f"[dim]Status: {r.status}[/]")
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_ip_geolocation(ctx):
+    """Geolocate an IP via ip-api.com (free, no key)."""
+    ip = ctx["ask"]("IP (blank for your own)", "")
+    url = f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,query,lon,lat"
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            data = json.loads(r.read())
+        if data.get("status") != "success":
+            ctx["console"].print(f"[{ctx['theme'].warning}]{data.get('status')}[/]")
+            return
+        rows = [(k, v) for k, v in data.items()]
+        _print_table(ctx, rows, ("Field", "Value"))
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_headers_dump(ctx):
+    url = ctx["ask"]("URL", "https://example.com")
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            rows = [(k, v) for k, v in r.headers.items()]
+            _print_table(ctx, rows, ("Header", "Value"))
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_http_methods(ctx):
+    """Probe allowed HTTP methods via OPTIONS."""
+    url = ctx["ask"]("URL", "https://example.com")
+    try:
+        req = urllib.request.Request(url, method="OPTIONS",
+                                       headers={"User-Agent": "{{PROJECT_NAME}}/1.0"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            allow = r.headers.get("Allow", "(not advertised)")
+            ctx["console"].print(f"[bold]Allow:[/] {allow}")
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].warning}]OPTIONS not supported: {exc}[/]")
+
+
+def cmd_robots_parser(ctx):
+    """Fetch and parse robots.txt, list sitemaps."""
+    url = ctx["ask"]("Site", "https://example.com").rstrip("/") + "/robots.txt"
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            body = r.read().decode("utf-8", "replace")
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+        return
+    sitemaps = [l.split(":", 1)[1].strip() for l in body.splitlines() if l.lower().startswith("sitemap")]
+    agents = [l.split(":", 1)[1].strip() for l in body.splitlines() if l.lower().startswith("user-agent")]
+    rows = [("Sitemaps", ", ".join(sitemaps) or "none"),
+            ("User-agents", ", ".join(agents) or "none")]
+    _print_table(ctx, rows, ("Field", "Value"))
+
+
+def cmd_sitemap_parser(ctx):
+    url = ctx["ask"]("Sitemap URL", "https://example.com/sitemap.xml")
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            body = r.read().decode("utf-8", "replace")
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+        return
+    urls = re.findall(r"<loc>(.*?)</loc>", body)
+    for u in urls[:50]:
+        ctx["console"].print(f"  - {u}")
+    ctx["console"].print(f"[dim]{len(urls)} URLs found.[/]")
+
+
+def cmd_github_user(ctx):
+    user = ctx["ask"]("GitHub username", "torvalds")
+    try:
+        with urllib.request.urlopen(f"https://api.github.com/users/{urllib.parse.quote(user)}", timeout=6) as r:
+            data = json.loads(r.read())
+        rows = [(k, data[k]) for k in ("login", "name", "company", "location",
+                                          "public_repos", "followers", "following", "bio") if k in data]
+        _print_table(ctx, rows, ("Field", "Value"))
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_github_repos(ctx):
+    user = ctx["ask"]("GitHub username", "torvalds")
+    try:
+        with urllib.request.urlopen(f"https://api.github.com/users/{urllib.parse.quote(user)}/repos?per_page=20", timeout=6) as r:
+            data = json.loads(r.read())
+        rows = [(repo["name"], repo.get("language", ""), repo["stargazers_count"]) for repo in data]
+        _print_table(ctx, rows, ("Repo", "Lang", "Stars"))
+    except urllib.error.URLError as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_random_token(ctx):
+    n = int(ctx["ask"]("Bytes", "32"))
+    ctx["console"].print(f"[{ctx['theme'].primary}]{secrets.token_urlsafe(n)}[/]")
+
+
+def cmd_timestamp_conv(ctx):
+    val = ctx["ask"]("Unix timestamp or ISO datetime")
+    try:
+        if val.isdigit():
+            ts = int(val)
+            dt = _dt.datetime.fromtimestamp(ts, tz=_dt.timezone.utc)
+            ctx["console"].print(f"[bold]UTC:[/] {dt.isoformat()}")
+            ctx["console"].print(f"[bold]Local:[/] {_dt.datetime.fromtimestamp(ts).isoformat()}")
+        else:
+            dt = _dt.datetime.fromisoformat(val)
+            ctx["console"].print(f"[bold]Unix:[/] {int(dt.timestamp())}")
+    except (ValueError, OSError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_color_palette(ctx):
+    """Generate a simple analogous palette from a base hex."""
+    import colorsys
+    h = ctx["ask"]("Base hex (#RRGGBB)", "#00fff5")
+    try:
+        r, g, b = int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255
+    except ValueError:
+        ctx["console"].print(f"[{ctx['theme'].danger}]Bad hex.[/]")
+        return
+    H, S, V = colorsys.rgb_to_hsv(r, g, b)
+    palette = []
+    for offset in (-40, -20, 0, 20, 40):
+        nh = (H + offset / 360) % 1.0
+        pr, pg, pb = colorsys.hsv_to_rgb(nh, S, V)
+        palette.append(f"#{int(pr*255):02x}{int(pg*255):02x}{int(pb*255):02x}")
+    for c in palette:
+        ctx["console"].print(f"[{c}]■■■[/]  {c}")
+
+
+def cmd_rot_all(ctx):
+    """Try all 25 Caesar shifts of a string."""
+    text = ctx["ask"]("Ciphertext")
+    for shift in range(1, 26):
+        out = "".join(
+            chr((ord(c) - 65 + shift) % 26 + 65) if "A" <= c <= "Z" else
+            chr((ord(c) - 97 + shift) % 26 + 97) if "a" <= c <= "z" else c
+            for c in text)
+        ctx["console"].print(f"[dim]{shift:>2}[/] {out}")
+
+
+def cmd_vigenere(ctx):
+    op = ctx["choose"]("Operation", ["encrypt", "decrypt"]) or "encrypt"
+    text = ctx["ask"]("Text")
+    key = ctx["ask"]("Key", "secret")
+    if not text or not key:
+        return
+    sign = 1 if op == "encrypt" else -1
+    out = []
+    ki = 0
+    for ch in text:
+        if ch.isalpha():
+            base = ord("A") if ch.isupper() else ord("a")
+            k = ord(key[ki % len(key)].lower()) - ord("a")
+            out.append(chr((ord(ch) - base + sign * k) % 26 + base))
+            ki += 1
+        else:
+            out.append(ch)
+    ctx["console"].print("".join(out))
+
+
+_MORSE = {
+    "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
+    "G": "--.", "H": "....", "I": "..", "J": ".---", "K": "-.-", "L": ".-..",
+    "M": "--", "N": "-.", "O": "---", "P": ".--.", "Q": "--.-", "R": ".-.",
+    "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
+    "Y": "-.--", "Z": "--..", "0": "-----", "1": ".----", "2": "..---",
+    "3": "...--", "4": "....-", "5": ".....", "6": "-....", "7": "--...",
+    "8": "---..", "9": "----.",
+}
+_MORSE_REV = {v: k for k, v in _MORSE.items()}
+
+
+def cmd_morse(ctx):
+    op = ctx["choose"]("Operation", ["encode", "decode"]) or "encode"
+    text = ctx["ask"]("Input")
+    if op == "encode":
+        out = " ".join(_MORSE.get(ch.upper(), "") for ch in text if ch != " ")
+        ctx["console"].print(out or "(nothing encodable)")
+    else:
+        words = text.split(" / ") if " / " in text else text.split("   ")
+        out = []
+        for word in words:
+            out.append("".join(_MORSE_REV.get(tok, "?") for tok in word.split()))
+        ctx["console"].print(" ".join(out))
+
+
+def cmd_hexdump(ctx):
+    path = ctx["ask"]("File path")
+    if not os.path.isfile(path):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not found.[/]")
+        return
+    data = open(path, "rb").read(1024)
+    for i in range(0, len(data), 16):
+        chunk = data[i:i+16]
+        hexpart = " ".join(f"{b:02x}" for b in chunk)
+        asciipart = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        ctx["console"].print(f"{i:08x}  {hexpart:<48}  {asciipart}")
+
+
+def cmd_file_hash(ctx):
+    path = ctx["ask"]("File path")
+    if not os.path.isfile(path):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not found.[/]")
+        return
+    algo = ctx["choose"]("Algorithm", sorted(hashlib.algorithms_guaranteed)) or "sha256"
+    h = hashlib.new(algo)
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    ctx["console"].print(f"[bold]{algo}[/]: {h.hexdigest()}")
+
+
+def cmd_zip_inspect(ctx):
+    path = ctx["ask"]("Zip path")
+    if not os.path.isfile(path):
+        ctx["console"].print(f"[{ctx['theme'].danger}]Not found.[/]")
+        return
+    try:
+        with zipfile.ZipFile(path) as zf:
+            rows = [(info.filename, info.file_size, info.compress_size)
+                    for info in zf.infolist()[:50]]
+            _print_table(ctx, rows, ("Name", "Size", "Compressed"))
+    except (zipfile.BadZipFile, OSError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def cmd_diff_text(ctx):
+    import difflib
+    a = ctx["ask"]("First text")
+    b = ctx["ask"]("Second text")
+    for line in difflib.unified_diff(a.splitlines(), b.splitlines(),
+                                       lineterm="", n=1):
+        if line.startswith("+"):
+            ctx["console"].print(f"[{ctx['theme'].success}]{line}[/]")
+        elif line.startswith("-"):
+            ctx["console"].print(f"[{ctx['theme'].danger}]{line}[/]")
+        else:
+            ctx["console"].print(line)
+
+
+def cmd_word_count(ctx):
+    text = ctx["ask"]("Text (or path)")
+    if os.path.isfile(text):
+        text = open(text, encoding="utf-8").read()
+    rows = [("Lines", text.count(chr(10)) + 1), ("Words", len(text.split())),
+            ("Chars", len(text)), ("Bytes", len(text.encode("utf-8")))]
+    _print_table(ctx, rows, ("Metric", "Count"))
+
+
+def cmd_base_convert(ctx):
+    n = ctx["ask"]("Number")
+    frm = int(ctx["ask"]("From base", "10"))
+    to = int(ctx["ask"]("To base", "16"))
+    try:
+        value = int(n, frm) if isinstance(n, str) else int(n)
+        ctx["console"].print(f"[bold]base{to}:[/] {selfless_digits(value, to)}")
+    except (ValueError, TypeError) as exc:
+        ctx["console"].print(f"[{ctx['theme'].danger}]{exc}[/]")
+
+
+def selfless_digits(n, base):
+    if n == 0:
+        return "0"
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while n > 0:
+        n, r = divmod(n, base)
+        out = digits[r] + out
+    return out
+
+
+# ============================================================
+# Command registry (real, grouped)
+# ============================================================
+
+COMMANDS: Dict[str, Dict[str, List[Tuple[str, Callable]]]] = {
     "Cybersecurity": {
-        "Port Scanner": [("TCP connect scan", cmd_port_scan)],
-        "DNS": [("Lookup A/AAAA", cmd_dns_lookup)],
+        "Port Scanner": [
+            ("TCP connect scan", cmd_port_scan),
+            ("Subnet calculator", cmd_subnet_calc),
+            ("SSL/TLS cert scan", cmd_ssl_scan),
+            ("ARP scan (local)", cmd_arp_scan),
+            ("HTTP methods probe", cmd_http_methods),
+            ("Headers dump", cmd_headers_dump),
+        ],
+        "DNS": [
+            ("Lookup A/AAAA", cmd_dns_lookup),
+            ("Reverse DNS", cmd_reverse_dns),
+            ("SPF / DMARC", cmd_spf_dmarc),
+        ],
         "WHOIS": [("Lookup", cmd_whois)],
-        "Hash Tool": [("Compute hash", cmd_hash)],
+        "Hash Tool": [
+            ("Compute hash", cmd_hash),
+            ("Dictionary cracker", cmd_hash_cracker),
+            ("Hash a file", cmd_file_hash),
+            ("HMAC", cmd_hmac_tool),
+        ],
         "Encryption": [("Symmetric encrypt/decrypt", cmd_encrypt)],
-        "Encoding": [("Encoder/Decoder", cmd_encode)],
+        "Encoding": [
+            ("Encoder/Decoder", cmd_encode),
+            ("Base58", cmd_base58),
+        ],
         "Reverse Shell Helper": [("One-liner generator", cmd_reverse_shell_helper)],
         "Payload Generator": [("msfvenom template", cmd_payload_gen)],
-        "Web Scanner": [("HTTP header check", cmd_web_scan)],
-        "Recon": [("Domain recon", cmd_recon)],
-        "Network Monitor": [("/proc/net/dev sampler", cmd_network_monitor)],
+        "Web Scanner": [
+            ("HTTP header check", cmd_web_scan),
+            ("Directory buster", cmd_dir_buster),
+            ("JWT decode", cmd_jwt_decode),
+            ("robots.txt parser", cmd_robots_parser),
+            ("Sitemap parser", cmd_sitemap_parser),
+            ("URL unshortener", cmd_url_unshorten),
+        ],
+        "Recon": [
+            ("Domain recon", cmd_recon),
+            ("Wayback Machine lookup", cmd_wayback),
+            ("Certificate Transparency (crt.sh)", cmd_cert_transparency),
+            ("GitHub user", cmd_github_user),
+        ],
+        "Network Monitor": [
+            ("/proc/net/dev sampler", cmd_network_monitor),
+            ("Headers dump", cmd_headers_dump),
+        ],
         "Log Analyzer": [("Count by level", cmd_log_analyzer)],
-        "CTF Tool": [("Encoder toolbox", cmd_ctf_helper)],
-        "Custom": [("OSINT username search", cmd_osint), ("WiFi scan", cmd_wifi_scan),
-                    ("Bluetooth scan", cmd_bluetooth_scan), ("Packet analyzer", cmd_packet_analyzer)],
+        "CTF Tool": [
+            ("Encoder toolbox", cmd_ctf_helper),
+            ("All Caesar shifts (ROT)", cmd_rot_all),
+            ("Vigenere cipher", cmd_vigenere),
+            ("Morse code", cmd_morse),
+            ("JSON pretty / minify", cmd_json_pretty),
+            ("Hexdump", cmd_hexdump),
+            ("Diff two strings", cmd_diff_text),
+        ],
+        "Custom": [
+            ("OSINT username search", cmd_osint),
+            ("WiFi scan", cmd_wifi_scan),
+            ("Bluetooth scan", cmd_bluetooth_scan),
+            ("Packet analyzer", cmd_packet_analyzer),
+            ("MAC vendor lookup", cmd_mac_vendor),
+        ],
     },
     "Networking": {
-        "Port Scanner": [("TCP connect scan", cmd_port_scan)],
-        "DNS": [("Lookup A/AAAA", cmd_dns_lookup)],
+        "Port Scanner": [
+            ("TCP connect scan", cmd_port_scan),
+            ("Subnet calculator", cmd_subnet_calc),
+            ("ARP scan", cmd_arp_scan),
+            ("HTTP methods probe", cmd_http_methods),
+        ],
+        "DNS": [
+            ("Lookup A/AAAA", cmd_dns_lookup),
+            ("Reverse DNS", cmd_reverse_dns),
+            ("SPF / DMARC", cmd_spf_dmarc),
+        ],
         "Ping Sweep": [("CIDR ping sweep", cmd_ping_sweep)],
         "Traceroute": [("Run traceroute", cmd_traceroute)],
         "Bandwidth Monitor": [("Download speed test", cmd_bandwidth_test)],
         "Port Forwarder": [("TCP forwarder", cmd_port_forward)],
         "DNS Lookup": [("Lookup A/AAAA", cmd_dns_lookup)],
-        "Custom": [("Domain recon", cmd_recon)],
+        "Custom": [("Domain recon", cmd_recon), ("Headers dump", cmd_headers_dump)],
     },
     "Developer": {
         "Code Generator": [("Snippet manager", cmd_snippet_manager)],
         "Boilerplate": [("Snippet manager", cmd_snippet_manager)],
-        "Git Helper": [("System info", cmd_system)],
+        "Git Helper": [
+            ("GitHub user info", cmd_github_user),
+            ("List GitHub repos", cmd_github_repos),
+            ("System info", cmd_system),
+        ],
         "Regex Tester": [("Run regex", cmd_regex_tester)],
         "Snippet Manager": [("Manage snippets", cmd_snippet_manager)],
-        "Custom": [("Regex tester", cmd_regex_tester)],
+        "UUID Tool": [("Generate / parse UUID", cmd_uuid_tool)],
+        "Timestamp": [("Unix <> ISO", cmd_timestamp_conv)],
+        "Custom": [
+            ("JSON pretty / minify", cmd_json_pretty),
+            ("TOML viewer", cmd_toml_view),
+        ],
     },
     "Automation": {
         "Task Runner": [("Todo list", cmd_todo)],
-        "File Batch": [("System info", cmd_system)],
-        "Web Scraper": [("Scrape links", cmd_web_scraper)],
-        "Scheduler": [("Timer", cmd_timer)],
-        "Custom": [("Todo", cmd_todo)],
+        "File Batch": [
+            ("Hexdump a file", cmd_hexdump),
+            ("Hash a file", cmd_file_hash),
+            ("Inspect zip", cmd_zip_inspect),
+        ],
+        "Web Scraper": [
+            ("Scrape links", cmd_web_scraper),
+            ("Sitemap parser", cmd_sitemap_parser),
+            ("robots.txt parser", cmd_robots_parser),
+        ],
+        "Scheduler": [("Timer", cmd_timer), ("Cron builder", cmd_cron_builder)],
+        "Custom": [("Todo list", cmd_todo)],
     },
     "API": {
-        "REST Client": [("REST request", cmd_rest_client)],
+        "REST Client": [
+            ("REST request", cmd_rest_client),
+            ("Headers dump", cmd_headers_dump),
+            ("HTTP methods probe", cmd_http_methods),
+        ],
         "GraphQL Client": [("REST request (fallback)", cmd_rest_client)],
         "Webhook Server": [("Run webhook server", cmd_webhook_server)],
         "Mock Server": [("Run webhook server (mock)", cmd_webhook_server)],
         "Custom": [("REST request", cmd_rest_client)],
     },
     "OSINT": {
-        "Username Lookup": [("Cross-site search", cmd_username_lookup)],
-        "Email Recon": [("Resolve & WHOIS", cmd_email_recon)],
-        "Domain Recon": [("DNS + robots + security.txt", cmd_recon)],
+        "Username Lookup": [
+            ("Cross-site search", cmd_username_lookup),
+            ("GitHub user", cmd_github_user),
+            ("GitHub repos", cmd_github_repos),
+        ],
+        "Email Recon": [("MX + DMARC", cmd_email_validate)],
+        "Domain Recon": [
+            ("DNS + robots + security.txt", cmd_recon),
+            ("Wayback", cmd_wayback),
+            ("Certificate Transparency", cmd_cert_transparency),
+            ("SPF / DMARC", cmd_spf_dmarc),
+            ("Reverse DNS", cmd_reverse_dns),
+        ],
         "Social Scan": [("Cross-site search", cmd_username_lookup)],
+        "Geolocation": [("IP geolocation", cmd_ip_geolocation)],
         "Custom": [("Domain recon", cmd_recon)],
     },
     "Bluetooth": {
@@ -992,7 +1758,10 @@ COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
         "Custom": [("Bluetooth scan", cmd_bluetooth_scan)],
     },
     "WiFi": {
-        "Network Scan": [("nmcli/iwlist scan", cmd_wifi_scan)],
+        "Network Scan": [
+            ("nmcli/iwlist scan", cmd_wifi_scan),
+            ("MAC vendor lookup", cmd_mac_vendor),
+        ],
         "Handshake Capture Helper": [("WiFi scan", cmd_wifi_scan)],
         "Signal Mapper": [("WiFi scan", cmd_wifi_scan)],
         "Custom": [("WiFi scan", cmd_wifi_scan)],
@@ -1003,7 +1772,10 @@ COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
         "Custom": [("System info", cmd_system)],
     },
     "Hardware": {
-        "Serial Monitor": [("List serial ports", cmd_serial_monitor)],
+        "Serial Monitor": [
+            ("List serial ports", cmd_serial_monitor),
+            ("Hexdump a file", cmd_hexdump),
+        ],
         "Flasher": [("System info", cmd_system)],
         "Sensor Reader": [("System info", cmd_system)],
         "Custom": [("Serial monitor", cmd_serial_monitor)],
@@ -1020,17 +1792,48 @@ COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
         "Custom": [("Serial monitor", cmd_serial_monitor)],
     },
     "IoT": {
-        "Device Discovery": [("mDNS browse", cmd_iot_discovery)],
+        "Device Discovery": [
+            ("mDNS browse", cmd_iot_discovery),
+            ("MAC vendor lookup", cmd_mac_vendor),
+        ],
         "MQTT Client": [("mDNS browse", cmd_iot_discovery)],
         "Telemetry Viewer": [("System info", cmd_system)],
         "Custom": [("mDNS browse", cmd_iot_discovery)],
     },
     "CLI Utility": {
-        "Calculator": [("Evaluate expression", cmd_calculator)],
+        "Calculator": [
+            ("Evaluate expression", cmd_calculator),
+            ("Unit converter", cmd_unit_convert),
+            ("Color converter", cmd_color_tool),
+            ("Color palette", cmd_color_palette),
+            ("Base converter", cmd_base_convert),
+        ],
         "Unit Converter": [("Convert units", cmd_unit_convert)],
-        "Password Gen": [("Generate password", cmd_password_gen)],
-        "Color Tool": [("Convert colors", cmd_color_tool)],
-        "Custom": [("Calculator", cmd_calculator), ("Color tool", cmd_color_tool)],
+        "Password Gen": [
+            ("Generate password", cmd_password_gen),
+            ("Generate secure token", cmd_random_token),
+            ("UUID generator", cmd_uuid_tool),
+        ],
+        "Color Tool": [
+            ("Convert colors", cmd_color_tool),
+            ("Generate palette", cmd_color_palette),
+        ],
+        "Encoder": [
+            ("Encoder/Decoder", cmd_encode),
+            ("Morse code", cmd_morse),
+            ("ROT all shifts", cmd_rot_all),
+            ("Vigenere cipher", cmd_vigenere),
+            ("JSON pretty / minify", cmd_json_pretty),
+            ("TOML viewer", cmd_toml_view),
+            ("Diff two strings", cmd_diff_text),
+            ("Word count", cmd_word_count),
+            ("Timestamp conversion", cmd_timestamp_conv),
+        ],
+        "Custom": [
+            ("Calculator", cmd_calculator),
+            ("Color tool", cmd_color_tool),
+            ("UUID generator", cmd_uuid_tool),
+        ],
     },
     "AI": {
         "Prompt Runner": [("REST request (LLM endpoint)", cmd_rest_client)],
@@ -1045,26 +1848,39 @@ COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
         "Custom": [("REST request", cmd_rest_client)],
     },
     "Forensics": {
-        "Disk Image": [("Hash file", cmd_hash)],
-        "Memory Dump": [("Hash file", cmd_hash)],
+        "Disk Image": [("Hash a file", cmd_file_hash), ("Hexdump", cmd_hexdump)],
+        "Memory Dump": [("Hash a file", cmd_file_hash), ("Hexdump", cmd_hexdump)],
         "Timeline Builder": [("Log analyzer", cmd_log_analyzer)],
-        "Custom": [("Hash file", cmd_hash)],
+        "Zip Inspection": [("Inspect zip", cmd_zip_inspect)],
+        "Custom": [("Hash file", cmd_file_hash)],
     },
     "Password Tools": {
-        "Generator": [("Generate password", cmd_password_gen)],
+        "Generator": [
+            ("Generate password", cmd_password_gen),
+            ("Generate secure token", cmd_random_token),
+        ],
         "Strength Meter": [("Measure entropy", cmd_strength)],
-        "Hash Cracker Helper": [("Compute hash", cmd_hash)],
+        "Hash Cracker Helper": [("Dictionary cracker", cmd_hash_cracker)],
         "Vault": [("Snippet manager", cmd_snippet_manager)],
         "Custom": [("Password generator", cmd_password_gen)],
     },
     "Monitoring": {
-        "System Watcher": [("Network sampler", cmd_network_monitor)],
+        "System Watcher": [
+            ("Network sampler", cmd_network_monitor),
+            ("ARP scan", cmd_arp_scan),
+        ],
         "Log Tail": [("Log analyzer", cmd_log_analyzer)],
-        "Uptime Pinger": [("Ping sweep", cmd_ping_sweep)],
+        "Uptime Pinger": [
+            ("Ping sweep", cmd_ping_sweep),
+            ("Traceroute", cmd_traceroute),
+        ],
         "Custom": [("Network monitor", cmd_network_monitor)],
     },
     "Discord": {
-        "Bot Template": [("REST request (Discord API)", cmd_rest_client)],
+        "Bot Template": [
+            ("REST request (Discord API)", cmd_rest_client),
+            ("Webhook server", cmd_webhook_server),
+        ],
         "Webhook Sender": [("REST request (Discord API)", cmd_rest_client)],
         "Message Logger": [("Webhook server", cmd_webhook_server)],
         "Custom": [("REST request", cmd_rest_client)],
@@ -1081,19 +1897,34 @@ COMMANDS: Dict[str, List[Tuple[str, Callable]]] = {
     },
     "Crypto": {
         "Price Tracker": [("Fetch live price", cmd_crypto_price)],
-        "Wallet Tool": [("Hash helper", cmd_hash)],
-        "Transaction Decoder": [("Hex decode", cmd_encode)],
+        "Wallet Tool": [("Hash helper", cmd_hash), ("Generate token", cmd_random_token)],
+        "Transaction Decoder": [
+            ("Hex decode", cmd_encode),
+            ("Base58", cmd_base58),
+        ],
         "Custom": [("Price tracker", cmd_crypto_price)],
     },
     "Productivity": {
         "Todo": [("Todo list", cmd_todo)],
         "Notes": [("Snippet manager", cmd_snippet_manager)],
-        "Timer": [("Countdown", cmd_timer)],
+        "Timer": [("Countdown", cmd_timer), ("Cron builder", cmd_cron_builder)],
         "Kanban": [("Todo list", cmd_todo)],
-        "Custom": [("Todo", cmd_todo)],
+        "Text Tools": [
+            ("Word count", cmd_word_count),
+            ("Diff two strings", cmd_diff_text),
+            ("JSON pretty / minify", cmd_json_pretty),
+        ],
+        "Custom": [("Todo list", cmd_todo)],
     },
     "Custom": {
-        "Custom": [("System info", cmd_system), ("Help", cmd_help)],
+        "Custom": [
+            ("System info", cmd_system),
+            ("Help", cmd_help),
+            ("Generate password", cmd_password_gen),
+            ("UUID generator", cmd_uuid_tool),
+            ("Timestamp conversion", cmd_timestamp_conv),
+            ("JSON pretty / minify", cmd_json_pretty),
+        ],
     },
 }
 

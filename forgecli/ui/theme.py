@@ -81,7 +81,10 @@ class ThemeRegistry:
 
     @property
     def names(self) -> List[str]:
-        return sorted(self._themes.keys(), key=str.lower)
+        # Return proper-case Theme.name values so they match the values users
+        # see in the UI and what's stored in settings. Lookup by .get() stays
+        # case-insensitive.
+        return sorted((t.name for t in self._themes.values()), key=str.lower)
 
     def __contains__(self, name: str) -> bool:
         return name.lower() in self._themes
